@@ -1355,6 +1355,11 @@ class Handlers:
         errored = False
         max_iterations = session.config.max_iterations
         no_tool_incomplete_plan_retries = 0
+        # Runaway-loop guardrails (see Config.max_turn_inference_usd /
+        # max_consecutive_tool_failures / max_consecutive_failed_iterations).
+        turn_inference_cost_usd = 0.0
+        consecutive_failed_iterations = 0
+        consecutive_failures_by_tool: dict[str, int] = {}
 
         while max_iterations == -1 or iteration < max_iterations:
             # ── Cancellation check: before LLM call ──
@@ -1380,6 +1385,28 @@ class Handlers:
                 continuation="continue_agent",
             ):
                 return final_response
+
+            # Per-turn inference-cost ceiling: stop before making another billed
+            # LLM call once this turn has already spent at/over the cap. Local
+            # (free) models report 0 cost, so this never trips for them.
+            _cost_cap = getattr(session.config, "max_turn_inference_usd", 0.0) or 0.0
+            if _cost_cap > 0 and turn_inference_cost_usd >= _cost_cap:
+                stop_msg = (
+                    f"Stopped this turn: it has spent ${turn_inference_cost_usd:.2f} on "
+                    f"model inference, at or above the per-turn cap of ${_cost_cap:.2f}. "
+                    f"Raise `max_turn_inference_usd` in config to allow more, or rephrase "
+                    f"the task into smaller steps."
+                )
+                logger.warning(
+                    "Per-turn inference cost cap hit: $%.4f >= $%.4f",
+                    turn_inference_cost_usd,
+                    _cost_cap,
+                )
+                await session.send_event(
+                    Event(event_type="error", data={"error": stop_msg})
+                )
+                errored = True
+                break
 
             # Doom-loop detection: break out of repeated tool call patterns
             doom_prompt = check_for_doom_loop(session.context_manager.items)
@@ -1436,6 +1463,7 @@ class Handlers:
                         session, messages, tools, llm_params
                     )
                 llm_observed_cost_usd = llm_result.usage.get("cost_usd")
+                turn_inference_cost_usd += _coerce_float(llm_observed_cost_usd)
 
                 content = llm_result.content
                 tool_calls_acc = llm_result.tool_calls_acc
@@ -1591,6 +1619,9 @@ class Handlers:
 
                 no_tool_incomplete_plan_retries = 0
 
+                # Per-iteration tool outcomes feed the failure circuit breaker.
+                iteration_tool_outcomes: list[tuple[str, bool]] = []
+
                 if await maybe_pause_yolo_after_spend(
                     session,
                     spend_kind="llm_call",
@@ -1625,6 +1656,7 @@ class Handlers:
                 # Add error results for bad tool calls so the LLM
                 # knows what happened and can retry differently
                 for tc in bad_tools:
+                    iteration_tool_outcomes.append((tc.function.name, False))
                     error_msg = (
                         f"ERROR: Tool call to '{tc.function.name}' had malformed JSON "
                         f"arguments and was NOT executed. Retry with smaller content — "
@@ -1803,6 +1835,7 @@ class Handlers:
 
                     # 4. Record results and send outputs (order preserved)
                     for tc, tool_name, tool_args, output, success in results:
+                        iteration_tool_outcomes.append((tool_name, success))
                         tool_msg = Message(
                             role="tool",
                             content=output,
@@ -1885,6 +1918,68 @@ class Handlers:
 
                     # Return early - wait for EXEC_APPROVAL operation
                     return None
+
+                # ── Failure circuit breaker ──
+                # Any success anywhere this iteration clears the streak; an
+                # all-failure iteration advances it. Stops the turn when one
+                # tool keeps failing or nothing is making progress.
+                if iteration_tool_outcomes:
+                    if any(ok for _, ok in iteration_tool_outcomes):
+                        consecutive_failures_by_tool.clear()
+                        consecutive_failed_iterations = 0
+                    else:
+                        consecutive_failed_iterations += 1
+                        for _name, _ok in iteration_tool_outcomes:
+                            if not _ok:
+                                consecutive_failures_by_tool[_name] = (
+                                    consecutive_failures_by_tool.get(_name, 0) + 1
+                                )
+
+                    _tool_limit = (
+                        getattr(session.config, "max_consecutive_tool_failures", 0) or 0
+                    )
+                    _iter_limit = (
+                        getattr(session.config, "max_consecutive_failed_iterations", 0)
+                        or 0
+                    )
+                    _tripped_tool = (
+                        next(
+                            (
+                                n
+                                for n, c in consecutive_failures_by_tool.items()
+                                if c >= _tool_limit
+                            ),
+                            None,
+                        )
+                        if _tool_limit > 0
+                        else None
+                    )
+                    _iter_tripped = (
+                        _iter_limit > 0
+                        and consecutive_failed_iterations >= _iter_limit
+                    )
+                    if _tripped_tool or _iter_tripped:
+                        if _tripped_tool:
+                            stop_msg = (
+                                f"Stopped this turn: the '{_tripped_tool}' tool failed "
+                                f"{consecutive_failures_by_tool[_tripped_tool]} times in a "
+                                f"row with no success. This usually means the approach is "
+                                f"wrong (bad arguments, a missing resource, or an auth "
+                                f"problem) — fix the cause or rephrase the request instead "
+                                f"of retrying the same call."
+                            )
+                        else:
+                            stop_msg = (
+                                f"Stopped this turn: {consecutive_failed_iterations} "
+                                f"consecutive rounds of tool calls all failed. Halting to "
+                                f"avoid burning credits on a stuck loop."
+                            )
+                        logger.warning("Tool-failure circuit breaker tripped: %s", stop_msg)
+                        await session.send_event(
+                            Event(event_type="error", data={"error": stop_msg})
+                        )
+                        errored = True
+                        break
 
                 iteration += 1
 

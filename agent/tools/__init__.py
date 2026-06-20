@@ -19,6 +19,7 @@ from agent.tools.github_read_file import (
     github_read_file_handler,
 )
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, HfJobsTool, hf_jobs_handler
+from agent.tools.qa_dataset_tool import QA_DATASET_TOOL_SPEC, qa_dataset_handler
 from agent.tools.types import ToolResult
 from agent.tools.web_search_tool import WEB_SEARCH_TOOL_SPEC, web_search_handler
 
@@ -37,6 +38,8 @@ __all__ = [
     "github_search_code_handler",
     "HF_INSPECT_DATASET_TOOL_SPEC",
     "hf_inspect_dataset_handler",
+    "QA_DATASET_TOOL_SPEC",
+    "qa_dataset_handler",
     "WEB_SEARCH_TOOL_SPEC",
     "web_search_handler",
 ]

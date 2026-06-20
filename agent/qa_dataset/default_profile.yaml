@@ -1,0 +1,126 @@
+# ml-intern — default Q&A dataset profile (best-practice starting point)
+#
+# Copied into a new project as qa_dataset_profile.yaml on init. The working-dir
+# copy is the source of truth thereafter and is model- + user-editable. Pins
+# everything that affects generation so a dataset is repeatable from this file
+# plus its persona file and source documents.
+
+seed: 42
+catalog_version: 2            # which strategy catalog this selection targets
+
+# ── Strategy SELECTION (ids resolved against strategies/catalog.yaml) ──
+# Mirrors the catalog's enabled_by_default set. Add/remove ids or override
+# params here; browse the full menu with `qa_dataset show_catalog`.
+strategies:
+  enabled:
+    - id: answer_aware_qg
+    - id: counterfactual_qg
+    - id: multi_hop_qg
+    - id: unanswerable_qg
+    - id: difficulty_ladder
+      params: { operators: [deepen, add_constraints, compose], max_depth: 2 }
+    - id: persona_conditioning
+    - id: boundary_testing
+    - id: question_paraphrase
+      params: { max_variants: 1 }
+    - id: temperature_sweep
+      params: { temperatures: [0.3, 0.5, 0.7], top_p: [0.9, 0.95] }
+    - id: best_of_n
+      params: { n: 3 }
+  # Available but off by default (enable to opt in):
+  #   answer_first_qg, table_qa, perspective_taking, analogical_grounded,
+  #   cot_scaffolding, multi_model_rotation, distractor_generation
+
+# ── Sources & chunking ──
+sources:
+  input_dir: ./books          # where the user's PDFs/EPUBs/TXT live
+  chunk_tokens: 800
+  chunk_overlap: 100
+  topic_tags: []              # auto-suggested at chunk time, then curated
+  preserve_tables: true       # keep tables intact as structured text (enables table_qa)
+  keep_figure_captions: true  # retain figure/table captions as answerable content
+  min_chunk_chars: 200        # drop tiny fragments that yield junk Q&A
+
+# ── Evaluation holdout (set BEFORE generation; never generated from) ──
+holdout:
+  strategy: by_source         # exclude whole sources/chapters
+  fraction: 0.15
+
+# ── Personas (stored separately; see qa_personas.yaml) ──
+personas:
+  file: qa_personas.yaml
+  version: 1
+  sample_per_item: 1          # personas drawn in code, pinned by seed
+
+# ── Target question-type mix (proportions, ~1.0) ──
+question_types:
+  factual: 0.25
+  boolean: 0.10
+  list: 0.10
+  comparative: 0.10
+  causal: 0.15
+  multi_hop: 0.10
+  counterfactual: 0.10
+  unanswerable: 0.10          # >=10% — teaches abstention
+
+# ── Target difficulty mix (assigned by difficulty_calibration, below) ──
+difficulty_mix: { easy: 0.4, medium: 0.4, hard: 0.2 }
+
+# ── Coverage & over-sampling control (spread questions across the book) ──
+coverage:
+  max_items_per_chunk: 8      # cap to avoid clustering on a few salient facts
+  min_chunk_coverage: 0.7     # >=70% of eligible chunks should yield >=1 kept item
+  # target_size: auto derives from eligible_chunks * max_items_per_chunk; a fixed
+  # integer overrides. 'auto' prevents forcing a small library into redundancy.
+
+# ── Generation ──
+generation:
+  # Generation uses its OWN model, independent of the interactive agent. Any
+  # litellm-compatible id, including local prefixes (vllm/, ollama/, ...).
+  # Set to "session" to reuse the interactive agent's model instead.
+  generator_model: vllm/Qwen2.5-14B-Instruct-AWQ
+  constrained_decoding: outlines   # outlines | xgrammar | none
+  max_new_tokens: 512
+
+# ── Verification (pipeline stage, not a catalog strategy) ──
+verification:
+  schema: required
+  verbatim_span_check: true   # skipped for counterfactual (uses grounding_quote)
+  faithfulness: required      # NLI-style; local judge is fine
+  answer_relevance: required  # answer must actually address the question, not just be faithful
+  self_consistency_k: 5
+  open_ended_rubric:          # light judge for open/causal/comparative answers
+    enabled: true
+    judge_model: generator   # reuse generator_model; or set an explicit id
+    dimensions: [completeness, relevance, no_hallucinated_detail]
+    min_score: 4              # on a 1-5 scale
+  max_repair_retries: 2       # repair-then-discard on QC failure
+
+# ── Difficulty calibration (explicit stage) ──
+difficulty_calibration:
+  enabled: true
+  base_model: target          # the model about to be fine-tuned (pre-training)
+  sample_size: 200            # items scored to build the solve-rate -> difficulty map
+  # solve_rate -> bucket: high solve = easy, low solve = hard
+
+# ── Filtering ──
+dedup:
+  minhash_jaccard: 0.7
+  embedding_cosine: 0.92
+decontamination:
+  ngram: 13
+  embedding_cosine: 0.85
+
+# ── Diversity acceptance gates (trigger rebalance/regeneration) ──
+diversity_gates:
+  max_single_type_share: 0.35
+  min_distinct_2: 0.6
+
+# ── Output ──
+output:
+  format: sft_chat            # tokenizer.apply_chat_template at package time
+  split_by: source            # leak-free splits
+  target_size: auto           # auto = eligible_chunks * coverage.max_items_per_chunk
+  system_prompt: "You answer questions using only the provided source material. If the material does not contain the answer, say so."
+  abstention_text: "That isn't covered in the source material."  # assistant gold answer for unanswerable items
+  completion_only_loss: true  # train loss on the assistant answer only, not the question/system

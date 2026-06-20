@@ -43,6 +43,18 @@ class Config(BaseModel):
     yolo_mode: bool = False  # Auto-approve all tool calls without confirmation
     max_iterations: int = 300  # Max LLM calls per agent turn (-1 = unlimited)
 
+    # Runaway-loop guardrails (prevent burning credits on a failing tool).
+    # Per-turn cumulative LLM inference cost ceiling in USD; when a single turn's
+    # billed inference exceeds this, the turn is stopped. <= 0 disables the cap.
+    # Local/free models report 0 cost, so this never trips for them.
+    max_turn_inference_usd: float = 2.0
+    # Stop the turn if the SAME tool returns a failure this many times in a row
+    # with no successful tool call in between. <= 0 disables.
+    max_consecutive_tool_failures: int = 3
+    # Stop the turn after this many consecutive iterations in which every tool
+    # call failed (no success anywhere). <= 0 disables.
+    max_consecutive_failed_iterations: int = 5
+
     # Permission control parameters
     confirm_cpu_jobs: bool = True
     auto_file_upload: bool = False

@@ -1,0 +1,98 @@
+# ml-intern — default reader personas (seed for qa_personas.yaml)
+#
+# Domain-agnostic reader archetypes that vary comprehension level, purpose, and
+# disposition. Seeded into a project, then refined collaboratively (propose ->
+# approve/trim/add -> freeze). No national/cultural stereotypes by design.
+
+version: 1
+personas:
+  - id: p-01-anxious-beginner
+    description: A complete beginner with no background, anxious about getting things wrong or unsafe.
+    tags: [beginner, cautious]
+  - id: p-02-curious-newcomer
+    description: An enthusiastic newcomer who wants the big picture before details.
+    tags: [beginner, overview]
+  - id: p-03-student-exam
+    description: A student studying for an exam who needs precise, testable facts.
+    tags: [beginner, factual]
+  - id: p-04-hands-on-learner
+    description: A learner who only understands ideas through concrete worked examples.
+    tags: [beginner, examples]
+  - id: p-05-intermediate-applier
+    description: An intermediate reader trying to apply a concept to a real task right now.
+    tags: [intermediate, applied]
+  - id: p-06-intermediate-debugging
+    description: An intermediate practitioner debugging a specific failure described in the text.
+    tags: [intermediate, troubleshooting]
+  - id: p-07-comparison-shopper
+    description: A reader weighing two approaches/options the material describes.
+    tags: [intermediate, comparative]
+  - id: p-08-skeptical-checker
+    description: A skeptic who challenges claims and wants the supporting evidence.
+    tags: [intermediate, critical]
+  - id: p-09-busy-skimmer
+    description: A time-pressed reader who skimmed and wants the one key takeaway.
+    tags: [intermediate, concise]
+  - id: p-10-detail-obsessed
+    description: A reader who wants every caveat, exception, and edge condition spelled out.
+    tags: [advanced, thorough]
+  - id: p-11-expert-reviewer
+    description: An expert reviewing the material for accuracy and omissions.
+    tags: [expert, critical]
+  - id: p-12-expert-refresher
+    description: An expert quickly refreshing a detail they once knew well.
+    tags: [expert, concise]
+  - id: p-13-teacher-prep
+    description: A teacher preparing a short introductory lesson from the material.
+    tags: [teacher, explanatory]
+  - id: p-14-teacher-quizwriter
+    description: An instructor writing quiz questions to test comprehension of the material.
+    tags: [teacher, assessment]
+  - id: p-15-practitioner-procedure
+    description: A practitioner who needs the exact step-by-step procedure to follow.
+    tags: [applied, procedural]
+  - id: p-16-troubleshooter-symptoms
+    description: Someone matching observed symptoms to a cause described in the text.
+    tags: [applied, diagnostic]
+  - id: p-17-safety-first
+    description: A reader most concerned with risks, warnings, and what not to do.
+    tags: [safety, cautious]
+  - id: p-18-cost-conscious
+    description: A reader focused on time, cost, or resource trade-offs the text mentions.
+    tags: [applied, tradeoffs]
+  - id: p-19-big-picture-synthesizer
+    description: A reader connecting this material to the broader theme of the work.
+    tags: [advanced, synthesis]
+  - id: p-20-precise-definitions
+    description: A reader who gets stuck on terminology and wants exact definitions.
+    tags: [beginner, terminology]
+  - id: p-21-why-asker
+    description: A reader who always asks why something works, not just what to do.
+    tags: [intermediate, causal]
+  - id: p-22-what-if-explorer
+    description: A reader probing hypotheticals grounded in the text's stated mechanisms.
+    tags: [advanced, counterfactual]
+  - id: p-23-completeness-checker
+    description: A reader who wants the full list of items/options the text enumerates.
+    tags: [intermediate, list]
+  - id: p-24-context-seeker
+    description: A reader asking how this fits with what an earlier section established.
+    tags: [advanced, multi_hop]
+  - id: p-25-quick-yes-no
+    description: A reader who wants a direct yes/no answer with a one-line justification.
+    tags: [intermediate, boolean]
+  - id: p-26-translator-to-plain
+    description: A reader who needs jargon translated into plain, everyday language.
+    tags: [beginner, plain_language]
+  - id: p-27-counterexample-hunter
+    description: A reader looking for where a rule breaks down or has exceptions.
+    tags: [advanced, edge_cases]
+  - id: p-28-note-taker
+    description: A reader distilling the section into a few memorable bullet facts.
+    tags: [intermediate, summary]
+  - id: p-29-real-world-connector
+    description: A reader asking how a concept shows up in a concrete real situation the text supports.
+    tags: [applied, examples]
+  - id: p-30-first-principles
+    description: A reader who wants the underlying principle, not just the surface rule.
+    tags: [advanced, conceptual]

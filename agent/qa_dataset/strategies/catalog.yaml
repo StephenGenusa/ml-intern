@@ -1,0 +1,405 @@
+# ml-intern — Q&A diversification strategy catalog
+#
+# The browsable menu of generation/diversification strategies. A dataset's
+# qa_dataset_profile.yaml selects strategy ids from here (strategies.enabled)
+# and may override params. This catalog is shipped + versioned; users may
+# extend it or point the pipeline at a custom catalog path.
+#
+# Entry fields:
+#   id                 unique key referenced by the profile
+#   category           question_type | difficulty | framing | answer_variation | sampling | mcq
+#   enabled_by_default whether the best-practice default profile turns it on
+#   applies_to         question-type ids this strategy targets, or "*"
+#   mode               single_call (one model call) | orchestrated (code-driven loop)
+#   description        what it does
+#   notes              guidance / caveats (incl. limited-value flags)
+#   params             default parameters (overridable per profile)
+#   prompt_template    schema-enforced prompt; enforce JSON via constrained
+#                      decoding (Outlines/xgrammar), never "return JSON" alone.
+#                      Length is bounded with max_tokens + word/sentence limits,
+#                      never by asking the model to count its own tokens.
+#   output_schema      JSON shape the strategy must emit
+#
+# NOTE: verification, dedup, decontamination, balancing, coverage, and
+# difficulty calibration are pipeline STAGES configured in the profile, not
+# strategies you select here. This catalog only shapes what Q&A gets generated.
+
+catalog_version: 2
+
+categories:
+  question_type: Strategies that produce questions of a given cognitive type.
+  difficulty: Strategies that control or escalate question difficulty.
+  framing: Strategies that vary the angle/voice while staying grounded in source.
+  answer_variation: Post-verification augmentation of an already-correct pair. Use sparingly.
+  sampling: Input-side variance (the dominant real-diversity lever).
+  mcq: Multiple-choice support (optional; off by default for chat SFT).
+
+strategies:
+  # ───────────────────────── question_type ─────────────────────────
+  - id: answer_aware_qg
+    category: question_type
+    enabled_by_default: true
+    applies_to: [factual, boolean, list, comparative, causal]
+    mode: single_call
+    description: >
+      Core single-chunk generator. Produces one typed question answerable ONLY
+      from the chunk, with the supporting answer span identified.
+    notes: >
+      The engine for most items. Reject any output with requires_outside_knowledge=true.
+      Accepts an optional answer_hint (a candidate span to target) — used by the
+      answer_first_qg flow.
+    params:
+      types: [factual, boolean, list, comparative, causal]
+      answer_hint: null
+    prompt_template: |
+      You generate one {question_type} question answerable ONLY from the PASSAGE.
+      Use no outside knowledge. Keep the question to one or two sentences.
+      If ANSWER_HINT is given, write a question whose answer is that span.
+      ANSWER_HINT: {answer_hint}
+      PASSAGE:
+      {passage}
+      Return data fitting the schema (enforced by constrained decoding).
+    output_schema:
+      question: string
+      question_type: string
+      answer_span: string|null
+      supporting_chunk_ids: string[]
+      requires_outside_knowledge: boolean
+
+  - id: answer_first_qg
+    category: question_type
+    enabled_by_default: false
+    applies_to: [factual, boolean, list, comparative]
+    mode: orchestrated
+    description: >
+      Alternative to answer_aware_qg. First extract salient candidate answer
+      spans from the chunk, then generate one question per span (via
+      answer_aware_qg with answer_hint set). Improves grounding and fact coverage.
+    notes: >
+      Tends to cover more of a chunk's facts than question-first. Enable in place
+      of (or alongside) answer_aware_qg when coverage matters more than speed.
+    params:
+      max_spans_per_chunk: 5
+    prompt_template: |
+      List the most important, self-contained factual spans in the PASSAGE that
+      could each anchor a question. Quote them verbatim. At most {max_spans_per_chunk}.
+      PASSAGE:
+      {passage}
+    output_schema:
+      candidate_spans: string[]
+
+  - id: counterfactual_qg
+    category: question_type
+    enabled_by_default: true
+    applies_to: [counterfactual]
+    mode: single_call
+    description: >
+      Generate a "what if X were different" question whose answer follows by
+      reasoning from the mechanism the PASSAGE states, plus that grounded answer.
+    notes: >
+      Verified by faithfulness-to-mechanism, NOT a verbatim span: the answer must
+      follow from what the passage explicitly says, and must cite the mechanism it
+      relies on. Discard if the answer requires facts not in the passage.
+    prompt_template: |
+      Using ONLY the mechanism/relationship the PASSAGE states, write one
+      "what if …" counterfactual question and its answer. The answer must follow
+      from the passage's stated mechanism — do not introduce outside facts.
+      Quote the passage text the reasoning relies on.
+      PASSAGE:
+      {passage}
+    output_schema:
+      question: string
+      question_type: string
+      answer: string
+      grounding_quote: string
+      supporting_chunk_ids: string[]
+
+  - id: multi_hop_qg
+    category: question_type
+    enabled_by_default: true
+    applies_to: [multi_hop]
+    mode: orchestrated
+    description: >
+      Generate a question that can only be answered by combining facts from two
+      related chunks. Code selects the chunk pair; the model composes the question.
+    notes: Harder for small generators; verify answerability against BOTH chunks.
+    params:
+      chunks_per_item: 2
+    prompt_template: |
+      Using BOTH passages, write one question that requires combining a fact from
+      PASSAGE A with a fact from PASSAGE B. It must be unanswerable from either
+      passage alone. One or two sentences.
+      PASSAGE A ({chunk_id_a}):
+      {passage_a}
+      PASSAGE B ({chunk_id_b}):
+      {passage_b}
+    output_schema:
+      question: string
+      question_type: string
+      answer_span: string
+      supporting_chunk_ids: string[]
+
+  - id: unanswerable_qg
+    category: question_type
+    enabled_by_default: true
+    applies_to: [unanswerable]
+    mode: single_call
+    description: >
+      Generate a plausible question about the passage's topic that is NOT
+      answerable from the passage. Teaches the model to abstain instead of
+      hallucinating. Gold answer is answerable=false.
+    notes: Target >=10% of the dataset. The question must look reasonable, not absurd.
+    prompt_template: |
+      Write one plausible question on the same topic as the PASSAGE that the
+      PASSAGE does NOT contain enough information to answer. Do not invent facts.
+      One sentence.
+      PASSAGE:
+      {passage}
+    output_schema:
+      question: string
+      question_type: string
+      answerable: boolean
+
+  - id: table_qa
+    category: question_type
+    enabled_by_default: false
+    applies_to: [factual, list, comparative]
+    mode: single_call
+    description: >
+      Generate questions over a chunk that contains a preserved table or a
+      figure caption (lookup, row/column comparison, enumeration).
+    notes: >
+      Only applied to chunks flagged as table/figure-bearing by chunking. Requires
+      sources.preserve_tables so the table survives as structured text.
+    prompt_template: |
+      The PASSAGE contains a table or figure caption. Write one question answerable
+      ONLY by reading it (a lookup, a comparison across rows/columns, or an
+      enumeration), plus the grounded answer quoting the relevant cells/caption.
+      PASSAGE:
+      {passage}
+    output_schema:
+      question: string
+      question_type: string
+      answer: string
+      answer_span: string
+      supporting_chunk_ids: string[]
+
+  # ───────────────────────── difficulty ─────────────────────────
+  - id: difficulty_ladder
+    category: difficulty
+    enabled_by_default: true
+    applies_to: ["*"]
+    mode: orchestrated
+    description: >
+      Evolve a base question harder by applying ONE operator per step, then
+      re-verifying it is still answerable from the same source (Evol-Instruct style).
+    notes: >
+      Track evolution_depth as a difficulty hint; the difficulty_calibration stage
+      assigns real buckets from base-model solve-rate. Discard evolutions that
+      become unanswerable.
+    params:
+      operators: [deepen, add_constraints, compose, concretize, increase_rarity]
+      max_depth: 2
+    prompt_template: |
+      Rewrite the QUESTION to be harder using ONLY the operator: {operator}.
+      It must remain answerable from the SAME source.
+      QUESTION: {question}
+      SOURCE: {passage}
+    output_schema:
+      evolved_question: string
+      still_answerable: boolean
+      new_answer_span: string|null
+
+  # ───────────────────────── framing ─────────────────────────
+  - id: persona_conditioning
+    category: framing
+    enabled_by_default: true
+    applies_to: ["*"]
+    mode: single_call
+    description: >
+      Condition question generation on a reader persona from qa_personas.yaml so
+      the phrasing/intent reflects that reader. The dominant grounded-diversity lever.
+    notes: Personas are sampled in code from the frozen persona set; never hardcode stereotypes.
+    params:
+      persona_field: description
+    prompt_template: |
+      You are writing a question the way THIS reader would ask it:
+      READER: {persona}
+      The question must still be answerable ONLY from the PASSAGE. One or two sentences.
+      PASSAGE:
+      {passage}
+    output_schema:
+      question: string
+      question_type: string
+      answer_span: string|null
+      persona_id: string
+
+  - id: perspective_taking
+    category: framing
+    enabled_by_default: false
+    applies_to: [causal, comparative]
+    mode: single_call
+    description: Produce answers from expert, beginner, and critic angles for the same question.
+    notes: >
+      Ported from the source docs. Useful for answer variety on open/causal items;
+      each angle must stay grounded in the passage. Off by default (adds volume,
+      modest training value for factual data).
+    params:
+      roles: [expert, beginner, critic]
+    prompt_template: |
+      Answer the QUESTION from each role below, using ONLY the PASSAGE.
+      Roles: {roles}. Keep each answer to <=3 sentences.
+      QUESTION: {question}
+      PASSAGE:
+      {passage}
+    output_schema:
+      answers_by_role: object
+
+  - id: boundary_testing
+    category: framing
+    enabled_by_default: true
+    applies_to: ["*"]
+    mode: single_call
+    description: >
+      Push a question toward an edge case (minimal information, a contradictory
+      premise, or an extreme/limiting scenario) while keeping it grounded.
+    notes: >
+      Merges the source docs' Boundary Testing + Adversarial Robustness. Mark each
+      item as still-answerable or newly-unanswerable; re-verify.
+    params:
+      edges: [minimal_info, contradictory_premise, extreme_scale]
+    prompt_template: |
+      Rewrite the QUESTION to probe the edge case: {edge}. Keep it about the same
+      PASSAGE. If the edge makes it unanswerable from the passage, say so.
+      QUESTION: {question}
+      PASSAGE:
+      {passage}
+    output_schema:
+      question: string
+      edge: string
+      answerable: boolean
+
+  - id: analogical_grounded
+    category: framing
+    enabled_by_default: false
+    applies_to: [causal]
+    mode: single_call
+    description: Ask the answer to explain a passage concept via an analogy tied to the source.
+    notes: Ported from Analogical Reasoning; constrain the analogy to the passage's stated mechanism. Optional.
+    prompt_template: |
+      Write a question asking for an explanation-by-analogy of a concept in the
+      PASSAGE, plus the grounded answer. The analogy must reflect the passage's
+      actual mechanism, not outside facts.
+      PASSAGE:
+      {passage}
+    output_schema:
+      question: string
+      answer_span: string
+
+  # ───────────────────────── answer_variation ─────────────────────────
+  - id: question_paraphrase
+    category: answer_variation
+    enabled_by_default: true
+    applies_to: ["*"]
+    mode: single_call
+    description: Restate a verified question while keeping the gold answer valid (robustness to phrasing).
+    notes: >
+      Ported from Syntactic Variety. Use SPARINGLY and dedup aggressively after —
+      paraphrase-only variants add limited training value and can dilute the set.
+    params:
+      max_variants: 1
+    prompt_template: |
+      Restate the QUESTION in a different but natural way. The gold ANSWER must
+      remain correct and answerable from the same source. One restatement.
+      QUESTION: {question}
+      ANSWER: {answer}
+    output_schema:
+      paraphrase: string
+
+  - id: cot_scaffolding
+    category: answer_variation
+    enabled_by_default: false
+    applies_to: [causal, multi_hop]
+    mode: single_call
+    description: Produce a step-by-step reasoning trace for the answer, stored separately from the gold answer.
+    notes: >
+      Ported from Chain-of-Thought Scaffolding. Only for reasoning-trace datasets;
+      off by default (poor value/cost on a hobbyist budget). Never bake the trace
+      into the gold answer field.
+    prompt_template: |
+      Show the reasoning steps to reach the ANSWER from the SOURCE, then restate
+      the final answer. Keep steps concise.
+      QUESTION: {question}
+      SOURCE: {passage}
+    output_schema:
+      reasoning: string
+      final_answer: string
+
+  # ───────────────────────── sampling ─────────────────────────
+  - id: temperature_sweep
+    category: sampling
+    enabled_by_default: true
+    applies_to: ["*"]
+    mode: orchestrated
+    description: Vary decoding temperature/top_p across generations for real output variance.
+    notes: Input-side diversity beats single-call "give me N variants". Seeds are pinned for repeatability.
+    params:
+      temperatures: [0.3, 0.5, 0.7]
+      top_p: [0.9, 0.95]
+
+  - id: best_of_n
+    category: sampling
+    enabled_by_default: true
+    applies_to: ["*"]
+    mode: orchestrated
+    description: Sample N candidate answers per question; selection happens in verification (self-consistency).
+    notes: Ported from Granular Sampling. Replaces the doc's single-call "5 candidates + merge".
+    params:
+      n: 3
+
+  - id: multi_model_rotation
+    category: sampling
+    enabled_by_default: false
+    applies_to: ["*"]
+    mode: orchestrated
+    description: Rotate among several local generator models so the set doesn't inherit one model's biases.
+    notes: >
+      Ported from Ensemble Strategies. Free locally (swap Qwen/Mistral/Llama).
+      Off by default; enable when you have multiple generators served.
+    params:
+      models: []
+
+  # ───────────────────────── mcq (optional) ─────────────────────────
+  - id: distractor_generation
+    category: mcq
+    enabled_by_default: false
+    applies_to: [factual, comparative]
+    mode: single_call
+    description: Generate plausible, definitively-wrong distractors for multiple-choice items.
+    notes: Optional; useful for cheap eval, weak as chat-SFT training format. Off by default.
+    params:
+      num_distractors: 3
+    prompt_template: |
+      Given the QUESTION and correct ANSWER (from SOURCE), write {num_distractors}
+      distractors that are plausible, similar in style, mutually exclusive, and
+      definitively wrong per the SOURCE. No "all/none of the above".
+      QUESTION: {question}
+      ANSWER: {answer}
+      SOURCE: {passage}
+    output_schema:
+      distractors: string[]
+      why_wrong: string[]
+
+# Dropped from the source documents (anti-patterns — kept here as a record):
+#   - confidence_calibration  : self-rated 1-10 confidence is uncalibrated; use
+#                               self-consistency + faithfulness instead.
+#   - in_context_diversification : "check bigram overlap and regenerate" cannot
+#                               run inside one call; handled by the diversity gate
+#                               + rebalance pipeline stage.
+#   - cultural_awareness enums : hardcoded national stereotypes; replaced by
+#                               persona_conditioning over a curated persona set.
+#   - precision/granularity/compositional levels : "same answer at N detail
+#                               levels" dilutes factual training data; dropped.
+#   - error_pattern / meta_cognitive / diverse_ai_feedback : these are
+#                               verification, not generation — handled in the
+#                               pipeline's verification stage, not the catalog.

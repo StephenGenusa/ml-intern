@@ -47,6 +47,7 @@ from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
 from agent.tools.notify_tool import NOTIFY_TOOL_SPEC, notify_handler
 from agent.tools.papers_tool import HF_PAPERS_TOOL_SPEC, hf_papers_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
+from agent.tools.qa_dataset_tool import QA_DATASET_TOOL_SPEC, qa_dataset_handler
 from agent.tools.research_tool import RESEARCH_TOOL_SPEC, research_handler
 from agent.tools.sandbox_tool import get_sandbox_tools
 from agent.tools.web_search_tool import WEB_SEARCH_TOOL_SPEC, web_search_handler
@@ -327,6 +328,13 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
             description=HF_INSPECT_DATASET_TOOL_SPEC["description"],
             parameters=HF_INSPECT_DATASET_TOOL_SPEC["parameters"],
             handler=hf_inspect_dataset_handler,
+        ),
+        # Synthetic Q&A dataset generation (grounded SFT data from local docs)
+        ToolSpec(
+            name=QA_DATASET_TOOL_SPEC["name"],
+            description=QA_DATASET_TOOL_SPEC["description"],
+            parameters=QA_DATASET_TOOL_SPEC["parameters"],
+            handler=qa_dataset_handler,
         ),
         # Planning and job management tools
         ToolSpec(
