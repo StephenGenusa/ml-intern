@@ -11,6 +11,10 @@
 
 An ML intern that autonomously researches, writes, and ships good quality ML related code using the Hugging Face ecosystem — with deep access to docs, papers, datasets, and cloud compute.
 
+Note about this fork: This fork takes a first swing at giving user assistance on Q&A generation
+see agent/qa_dataset which include Q&A development strategies and personas. The agent loop also has guardrails to prevent the endless loop of agent tool call failures that end up just wasting money
+
+
 ## Quick Start
 
 ### Installation
